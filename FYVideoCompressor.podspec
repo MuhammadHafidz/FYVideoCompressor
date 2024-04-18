@@ -8,7 +8,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'FYVideoCompressor'
-  s.version          = '0.0.9'
+  s.version          = '0.1.0'
   s.summary          = 'A high-performance, flexible and easy to use Video compressor library written by Swift.'
 
 # This description is used to generate tags and improve search results.
@@ -25,7 +25,7 @@ Pod::Spec.new do |s|
   # s.screenshots     = 'www.example.com/screenshots_1', 'www.example.com/screenshots_2'
   s.license          = { :type => 'MIT', :file => 'LICENSE' }
   s.author           = { 't2je' => 't2je@outlook.com' }
-  s.source           = { :git => 'https://github.com/T2Je/FYVideoCompressor.git', :tag => s.version.to_s }
+  s.source           = { :git => 'https://github.com/MuhammadHafidz/FYVideoCompressor.git', :tag => s.version.to_s }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
 
    s.ios.deployment_target = '11'
