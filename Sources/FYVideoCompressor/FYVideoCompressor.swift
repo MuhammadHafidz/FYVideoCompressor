@@ -23,7 +23,7 @@ public class FYVideoCompressor {
             }
         }
     }
-    
+
     /// Quality configuration. VideoCompressor will compress video by decreasing fps and bitrate.
     /// Bitrate has a minimum value: `minimumVideoBitrate`, you can change it if need.
     /// The video will be compressed using H.264, audio will be compressed using AAC.
@@ -61,7 +61,7 @@ public class FYVideoCompressor {
         }
         
     }
-    
+
     public enum VideoResolution: Equatable {
         case sd
         case hd
@@ -90,7 +90,6 @@ public class FYVideoCompressor {
             }
         }
     }
-    
     
     // Compression Encode Parameters
     public struct CompressionConfig {
@@ -391,6 +390,121 @@ public class FYVideoCompressor {
     public func compressVideo(_ asset: AVAsset, config: CompressionConfig, preferredResolution: VideoResolution = .noEspecified, frameReducer: VideoFrameReducer = ReduceFrameEvenlySpaced(), completion: @escaping (Result<URL, Error>) -> Void) {
         self.videoFrameReducer = frameReducer
         
+        // setup
+        guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+            completion(.failure(VideoCompressorError.noVideo))
+            return
+        }
+        
+        let targetVideoBitrate: Float
+        if Float(config.videoBitrate) > videoTrack.estimatedDataRate {
+            targetVideoBitrate = videoTrack.estimatedDataRate
+        } else {
+            targetVideoBitrate = Float(config.videoBitrate)
+        }
+        
+        let targetSize = calculateSizeWithResolution(preferredResolution, originalSize: videoTrack.naturalSize)
+        
+        #if DEBUG
+        print("video codec type: \(videoCodecType(for: videoTrack))")
+        print("naturalSize es : \(videoTrack.naturalSize)")
+        print("targetSize es : \(targetSize)")
+        #endif
+        
+        var inputSettings = [String: Any]()
+        
+        if let customConfig = config.settings {
+            inputSettings = customConfig
+            inputSettings[AVVideoWidthKey] = targetSize.width
+            inputSettings[AVVideoHeightKey] = targetSize.height
+            
+            if var videoCompresionSettings = inputSettings[AVVideoCompressionPropertiesKey] as? [String: Any] {
+                videoCompresionSettings[AVVideoAverageBitRateKey] = targetVideoBitrate
+                videoCompresionSettings[AVVideoMaxKeyFrameIntervalKey] = config.videomaxKeyFrameInterval
+                
+                //NEW
+                videoCompresionSettings[AVVideoExpectedSourceFrameRateKey] = config.fps
+                inputSettings[AVVideoCompressionPropertiesKey] = videoCompresionSettings
+            } else {
+                inputSettings[AVVideoCompressionPropertiesKey] = [AVVideoAverageBitRateKey: targetVideoBitrate, AVVideoMaxKeyFrameIntervalKey: config.videomaxKeyFrameInterval]
+            }
+        } else {
+            inputSettings = createVideoSettingsWithBitrate(targetVideoBitrate,
+                                                           maxKeyFrameInterval: config.videomaxKeyFrameInterval,
+                                                           size: targetSize)
+        }
+        
+        #if DEBUG
+        if let conf = config.settings {
+            print("video input settings: \(conf)")
+        }
+        print("video output settings: \(inputSettings)")
+        #endif
+
+        let videoSettings = inputSettings
+        
+        var audioTrack: AVAssetTrack?
+        var audioSettings: [String: Any]?
+        
+        if let adTrack = asset.tracks(withMediaType: .audio).first {
+            audioTrack = adTrack
+            let targetAudioBitrate: Float
+            if Float(config.audioBitrate) < adTrack.estimatedDataRate {
+                targetAudioBitrate = Float(config.audioBitrate)
+            } else {
+                targetAudioBitrate = 64_000
+            }
+            
+            let targetSampleRate: Int
+            if config.audioSampleRate < 8000 {
+                targetSampleRate = 8000
+            } else if config.audioSampleRate > 192_000 {
+                targetSampleRate = 192_000
+            } else {
+                targetSampleRate = config.audioSampleRate
+            }
+            audioSettings = createAudioSettingsWithAudioTrack(adTrack, bitrate: targetAudioBitrate, sampleRate: targetSampleRate)
+        }
+        
+        var _outputPath: URL
+        if let outputPath = config.outputPath {
+            _outputPath = outputPath
+        } else {
+            _outputPath = FileManager.tempDirectory(with: "CompressedVideo")
+        }
+        
+        #if DEBUG
+        print("************** Video info **************")
+        
+        print("🎬 Video ")
+        print("ORIGINAL:")
+        print("bitrate: \(videoTrack.estimatedDataRate) b/s")
+        print("fps: \(videoTrack.nominalFrameRate)") //
+        print("scale size: \(videoTrack.naturalSize)")
+        
+        print("TARGET:")
+        print("video bitrate: \(targetVideoBitrate) b/s")
+        print("fps: \(config.fps)")
+        print("scale size: (\(targetSize))")
+        print("****************************************")
+        #endif
+        
+        _compress(asset: asset,
+                  fileType: config.fileType,
+                  videoTrack,
+                  videoSettings,
+                  audioTrack,
+                  audioSettings,
+                  targetFPS: config.fps,
+                  outputPath: _outputPath,
+                  completion: completion)
+    }
+
+    /// Compress Video with URL and config.
+    public func compressVideo(_ url: URL, config: CompressionConfig, preferredResolution: VideoResolution = .noEspecified, frameReducer: VideoFrameReducer = ReduceFrameEvenlySpaced(), completion: @escaping (Result<URL, Error>) -> Void) {
+        self.videoFrameReducer = frameReducer
+        
+        let asset = AVAsset(url: url)
         // setup
         guard let videoTrack = asset.tracks(withMediaType: .video).first else {
             completion(.failure(VideoCompressorError.noVideo))
@@ -917,5 +1031,83 @@ AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: bitrate,
         } else {
             return true // Assume keyframe if attachment is not present
         }
+    }
+    
+    public func checkIsNeedToCompress(
+        url: URL,
+        config: FYVideoCompressor.CompressionConfig,
+        resolution: FYVideoCompressor.VideoResolution,
+        completion: @escaping (Result<Bool, Error>) -> Void
+    ) {
+        self.getVideoTrackData(
+            url
+        ) { res in
+            
+            switch res {
+            case .success(let asset):
+                #if DEBUG
+                print("************** Is Need Compress ? **************")
+
+                print("🎬 Video ")
+                print("ORIGINAL:")
+                print("bitrate: \(asset.estimatedDataRate) b/s")
+                print("fps: \(asset.nominalFrameRate)") //
+                print("scale size: \(asset.naturalSize)")
+                print("fileType: \(url.pathExtension.lowercased())")
+
+                print("TARGET:")
+                print("video bitrate: \(config.videoBitrate) b/s")
+                print("fps: \(config.fps)")
+                print("resolution: (\(resolution))")
+                print("fileType: (\(config.fileType.fileExtension))")
+                print("****************************************")
+                #endif
+
+                if asset.naturalSize.width <= resolution.value || asset.naturalSize.height <= resolution.value {
+                    if asset.estimatedDataRate <= Float(config.videoBitrate) {
+                        if asset.nominalFrameRate <= config.fps {
+                            if config.fileType.fileExtension.contains(url.pathExtension.lowercased()) {
+                                completion(.success(false))
+                            }
+                        }
+                    }
+                }
+                completion(.success(true))
+            case .failure(let failure):
+                completion(.failure(failure))
+                return
+            }
+            
+        }
+        
+    }
+    
+    public func getVideoTrackData(
+        _ url: URL,
+        completion: @escaping (Result<AVAssetTrack, Error>) -> Void
+    ) {
+        let asset = AVAsset(url: url)
+        // setup
+        if #available(iOS 15.0, *) {
+            asset.loadTracks(withMediaType: .video, completionHandler: { track, error in
+                if let error = error {
+                    completion(.failure(error))
+                } else {
+                    guard let videoTrack = track?.first else {
+                        completion(.failure(VideoCompressorError.noVideo))
+                        return
+                    }
+                    completion(.success(videoTrack))
+                }
+            })
+        } else {
+            guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+                completion(.failure(VideoCompressorError.noVideo))
+                return
+            }
+            
+            completion(.success(videoTrack))
+        }
+        
     }
 }
