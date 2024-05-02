@@ -1068,11 +1068,13 @@ AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: bitrate,
                         if asset.nominalFrameRate <= config.fps {
                             if config.fileType.fileExtension.contains(url.pathExtension.lowercased()) {
                                 completion(.success(false))
+                                return
                             }
                         }
                     }
                 }
                 completion(.success(true))
+                return
             case .failure(let failure):
                 completion(.failure(failure))
                 return
